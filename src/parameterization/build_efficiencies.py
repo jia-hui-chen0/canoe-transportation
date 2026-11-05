@@ -24,6 +24,7 @@ from parameterization.manual_parameters import validate_manual_registry
 from parameterization.ldv_ev_ranges import RangeEvidence, existing_range_weights, module_rules as range_module_rules
 from fetching.epa_omega_baseline import SOURCE as OMEGA, COMPONENT as OMEGA_COMPONENT, build_request as omega_request
 from parameterization.offroad_efficiencies import derive_offroad_consumption
+from parameterization.ev_chargers import _manual_value as _charger_manual_value
 from parameterization.road_efficiencies import (
     RoadEfficiencyEvidence,
     aggregate_atb,
@@ -713,11 +714,26 @@ def prepare_efficiency_rows(
         utility_factors[powertrain] = float(factors.iloc[0])
     reference = load_vehicle_reference(bundle)
     paths.extend(reference.paths)
+    # NRCan electricity ratings are wall energy; use the same reviewed LDV charger
+    # efficiency as the chargers so vehicle and charger rows cannot disagree.
+    charger_rules = load_harmonization_rules(bundle, "ev_chargers")
+    charger_manual_rules = load_harmonization_rules(bundle, "manual_parameters")
+    _, charger_frames = validate_manual_registry(
+        bundle,
+        source_column=charger_manual_rules["source_column"],
+        notes_column=charger_manual_rules["notes_column"],
+        selected_files={charger_rules["manual_file"]},
+    )
+    ldv_charger_efficiency = _charger_manual_value(
+        charger_frames[charger_rules["manual_file"]], "ldv", "efficiency", "all"
+    )
+    paths.append(resolve_input_path(bundle, "manual", charger_rules["manual_file"]))
     classified = classify_ratings(
         ratings,
         epa,
         rules=rules,
         conversions=conversions,
+        charger_efficiency=ldv_charger_efficiency,
         phev_contract=atb_rules["components"]["phev_efficiency"][
             "future_nrcan_phev_contract"
         ],
