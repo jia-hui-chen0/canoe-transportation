@@ -347,8 +347,14 @@ def classify_ratings(
     phev_contract: dict | None = None,
     uf_by_powertrain: dict[str, float] | None = None,
     range_rules=None,
+    charger_efficiency: float | None = None,
 ) -> pd.DataFrame:
-    """Retain native rows and combine independent name/configuration HEV evidence."""
+    """Retain native rows and combine independent name/configuration HEV evidence.
+
+    NRCan electricity ratings are wall energy (``ratings.electricity_basis: wall``), so BEV
+    and PHEV charge-depleting electricity are multiplied by ``charger_efficiency`` to give the
+    vehicle's consumption of charger output; the native rating stays in ``native_consumption``.
+    """
     spec = rules["ratings"]
     if spec["range_mapping"] != "omega_bucket_boundaries" or range_rules is None:
         raise ValueError("NRCan EV ratings require the configured OMEGA range-bucket contract")
@@ -384,12 +390,22 @@ def classify_ratings(
         conventional["year"] = pd.to_numeric(conventional[fields["year"]], errors="raise").astype(int)
         hybrid_audit = _configuration_hybrid_evidence(conventional, epa, spec)
         hybrid_audit.index = pd.MultiIndex.from_frame(conventional[["component", "source_row"]])
+    def wall_to_charger_output() -> float:
+        if spec.get("electricity_basis") != "wall":
+            raise ValueError(f"Unsupported ratings.electricity_basis: {spec.get('electricity_basis')!r}")
+        if charger_efficiency is None or not np.isfinite(charger_efficiency) or not 0 < charger_efficiency <= 1:
+            raise ValueError("NRCan electricity ratings are wall energy; pass the reviewed LDV charger efficiency in (0, 1]")
+        return float(charger_efficiency)
+
     results = []
     for source in frames:
         frame = source.copy()
         frame["year"] = pd.to_numeric(frame[fields["year"]], errors="raise").astype(int)
         frame["rating_class"] = frame[fields["class"]]
         frame["classification_method"] = "source_fuel"
+        if fields["electricity"] in frame or fields["phev_range"] in frame:
+            frame["electricity_basis"] = spec["electricity_basis"]
+            frame["charger_efficiency_applied"] = wall_to_charger_output()
         if fields["electricity"] in frame:
             frame["legacy_range_label"] = pd.cut(
                 frame[fields["bev_range"]],
@@ -408,6 +424,7 @@ def classify_ratings(
                 frame.native_consumption
                 * conversions["energy"]["kwh_to_mj"]
                 * conversions["service"]["per_100_km_to_per_km"]
+                * frame.charger_efficiency_applied
             )
             frame["classification_method"] = "omega_range_bucket"
         elif fields["phev_range"] in frame:
@@ -467,6 +484,7 @@ def classify_ratings(
             per_km = conversions["service"]["per_100_km_to_per_km"]
             frame["utility_weighted_electricity_mj_per_vkm"] = (
                 uf * frame.cd_electricity_kwh_per_100km * conversions["energy"]["kwh_to_mj"] * per_km
+                * frame.charger_efficiency_applied
             )
             frame["utility_weighted_fuel_mj_per_vkm"] = (
                 uf * frame.cd_fuel_l_per_100km + (1 - uf) * cs

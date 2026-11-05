@@ -604,12 +604,15 @@ def test_phev_rating_keeps_components_and_combines_cd_cs_with_explicit_uf(rules,
         phev_contract=load_harmonization_rules(bundle, "nlr_atb_autonomie")[
             "components"
         ]["phev_efficiency"]["future_nrcan_phev_contract"],
+        charger_efficiency=0.95,
     ).iloc[0]
     assert result.combined_cd_consumption_Le_100_km == 1.8
     assert result.combined_cs_consumption_L_100_km == 5.5
     assert "15.8 kWh" in result.combined_cd_consumption_Le_100_km_raw
     hhv = load_conversion_factors(bundle)["fuel_hhv"]["gasoline_mj_per_litre"]
-    assert result.consumption_mj_per_vkm == pytest.approx((0.6 * 15.8 * 3.6 + 0.4 * 5.5 * hhv) / 100)
+    assert result.consumption_mj_per_vkm == pytest.approx((0.6 * 15.8 * 3.6 * 0.95 + 0.4 * 5.5 * hhv) / 100)
+    assert result.electricity_basis == "wall"
+    assert result.charger_efficiency_applied == 0.95
     assert result.cd_electricity_kwh_per_100km == 15.8
     assert result.cd_fuel_l_per_100km == 0
     assert result.fleet_utility_factor == 0.6
@@ -629,11 +632,54 @@ def test_nrcan_bev_range_mapping_keeps_all_four_omega_buckets(rules, bundle):
     result = classify_ratings(
         [source], pd.DataFrame(columns=rules["ratings"]["evidence_columns"]),
         rules=rules, conversions=conversions, range_rules=range_module_rules(bundle),
+        charger_efficiency=0.95,
     )
     assert list(result.powertrain) == ["bev_150_miles", "bev_200_miles", "bev_300_miles", "bev_400_miles"]
     assert len(set(result.legacy_range_label)) == 3
     assert list(result.range_km) == list(source["Range (km)"])
-    assert result.consumption_mj_per_vkm.eq(0.54).all()
+    # 15 kWh/100 km at the wall x 3.6 MJ/kWh / 100 x 0.95 charger efficiency = charger output
+    assert result.consumption_mj_per_vkm.to_numpy() == pytest.approx([0.513] * 4)
+    assert result.native_consumption.eq(15).all()
+
+
+def _bev_rating(conversions):
+    return pd.DataFrame([{
+        "source_row": 2, "component": "bev", "Model year": 2023, "Make": "Fixture", "Model": "BEV",
+        "Vehicle class": "Compact", "Range (km)": 300 * conversions["length"]["mile_to_km"],
+        "Combined (kWh/100 km)": 18.0,
+    }])
+
+
+def test_bev_wall_rating_counts_charging_loss_once(rules, bundle):
+    conversions = load_conversion_factors(bundle)
+    result = classify_ratings(
+        [_bev_rating(conversions)], pd.DataFrame(columns=rules["ratings"]["evidence_columns"]),
+        rules=rules, conversions=conversions, range_rules=range_module_rules(bundle), charger_efficiency=0.95,
+    ).iloc[0]
+    assert result.consumption_mj_per_vkm == pytest.approx(18.0 * 3.6 * 0.01 * 0.95)
+    # Grid electricity per km (vehicle consumption / charger efficiency) equals the native rating.
+    assert result.consumption_mj_per_vkm / result.charger_efficiency_applied == pytest.approx(18.0 * 3.6 * 0.01)
+
+
+@pytest.mark.parametrize("charger_efficiency", [None, 0.0, 1.2, float("nan")])
+def test_wall_ratings_require_a_valid_charger_efficiency(rules, bundle, charger_efficiency):
+    conversions = load_conversion_factors(bundle)
+    with pytest.raises(ValueError, match="charger efficiency"):
+        classify_ratings(
+            [_bev_rating(conversions)], pd.DataFrame(columns=rules["ratings"]["evidence_columns"]),
+            rules=rules, conversions=conversions, range_rules=range_module_rules(bundle),
+            charger_efficiency=charger_efficiency,
+        )
+
+
+def test_unknown_electricity_basis_fails(rules, bundle):
+    conversions = load_conversion_factors(bundle)
+    changed = {**rules, "ratings": {**rules["ratings"], "electricity_basis": "battery"}}
+    with pytest.raises(ValueError, match="electricity_basis"):
+        classify_ratings(
+            [_bev_rating(conversions)], pd.DataFrame(columns=rules["ratings"]["evidence_columns"]),
+            rules=changed, conversions=conversions, range_rules=range_module_rules(bundle), charger_efficiency=0.95,
+        )
 
 
 def test_unsplit_suv_sums_weights_and_renormalizes_observed(rules):

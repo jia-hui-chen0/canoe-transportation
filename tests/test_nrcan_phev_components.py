@@ -121,6 +121,9 @@ def test_classifier_preserves_all_models_after_source_concatenation(rules, bundl
     assert models.native_consumption.tolist() == [2, 10, 11, 12, 13, 14, 45]
 
 
+CHARGER_EFFICIENCY = 0.95
+
+
 def _classify_phev(rules, bundle, contract, utility_factors):
     source = pd.DataFrame([{
         "source_row": 2, "component": "phev", "Model year": 2023,
@@ -131,7 +134,7 @@ def _classify_phev(rules, bundle, contract, utility_factors):
     return classify_ratings(
         [source], pd.DataFrame(columns=rules["ratings"]["evidence_columns"]),
         rules=rules, conversions=load_conversion_factors(bundle), range_rules=range_module_rules(bundle),
-        phev_contract=contract, uf_by_powertrain=utility_factors,
+        phev_contract=contract, uf_by_powertrain=utility_factors, charger_efficiency=CHARGER_EFFICIENCY,
     ).iloc[0]
 
 
@@ -139,7 +142,8 @@ def _classify_phev(rules, bundle, contract, utility_factors):
 def test_phev_total_energy_includes_cd_gasoline_and_cs_without_double_counting(rules, bundle, contract, uf):
     result = _classify_phev(rules, bundle, contract, {"phev_35_miles": uf})
     hhv = load_conversion_factors(bundle)["fuel_hhv"]["gasoline_mj_per_litre"]
-    electricity = uf * 23.2 * 3.6 / 100
+    # Wall-side CD electricity converted to charger output; fuel unchanged.
+    electricity = uf * 23.2 * 3.6 / 100 * CHARGER_EFFICIENCY
     fuel = (uf * 0.1 + (1 - uf) * 6.1) * hhv / 100
     assert result.utility_weighted_electricity_mj_per_vkm == pytest.approx(electricity)
     assert result.utility_weighted_fuel_mj_per_vkm == pytest.approx(fuel)

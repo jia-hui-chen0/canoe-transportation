@@ -2226,6 +2226,10 @@ parameterization:
       phev_range_edges_km: [0, 55, 210]
       phev_range_labels: [phev_35_miles, phev_50_miles]
       phev_baseline: nrcan_cd_cs_atb_bucket_uf
+      # NRCan BEV and PHEV CD electricity ratings are EPA label values: AC energy from the
+      # outlet, including the vehicle charger's losses (40 CFR 600.116-12; SAE J1634). Vehicle
+      # electricity is converted to charger output with the reviewed LDV charger efficiency.
+      electricity_basis: wall
       ignored_classes: [Special purpose vehicle]
     existing_phev_blends:
       cars: {tech: T_BLND_GSL_ELC_PHEV_C_EX, output: T_gsl_elc_phev_c_ex}

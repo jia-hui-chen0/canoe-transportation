@@ -784,10 +784,17 @@ def _phev_assigned_components(chosen: pd.DataFrame, powertrain: str, conversions
         })
         if hhv.isna().any():
             raise ValueError("PHEV family reassignment requires a supported native liquid-fuel identity")
+    if "charger_efficiency_applied" not in result:
+        raise ValueError("PHEV family reassignment requires the charger efficiency applied to the wall-energy ratings")
+    charger_efficiency = pd.to_numeric(result.charger_efficiency_applied, errors="raise")
+    if not np.isfinite(charger_efficiency).all() or not charger_efficiency.between(0, 1, inclusive="right").all():
+        raise ValueError("PHEV family charger efficiency must lie in (0, 1]")
     per_km = conversions["service"]["per_100_km_to_per_km"]
     result["fleet_utility_factor"] = uf
     result["utility_factor_basis"] = "assigned_family_median_range_bucket"
-    result["utility_weighted_electricity_mj_per_vkm"] = uf * result.cd_electricity_kwh_per_100km * conversions["energy"]["kwh_to_mj"] * per_km
+    result["utility_weighted_electricity_mj_per_vkm"] = (
+        uf * result.cd_electricity_kwh_per_100km * conversions["energy"]["kwh_to_mj"] * per_km * charger_efficiency
+    )
     result["utility_weighted_fuel_mj_per_vkm"] = (uf * result.cd_fuel_l_per_100km + (1 - uf) * result.cs_fuel_l_per_100km) * hhv * per_km
     result["consumption_mj_per_vkm"] = result.utility_weighted_electricity_mj_per_vkm + result.utility_weighted_fuel_mj_per_vkm
     return result
